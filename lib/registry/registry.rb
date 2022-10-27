@@ -1,6 +1,8 @@
 require 'fileutils'
 require 'rest-client'
 require 'json'
+require 'gzip'
+require 'digest'
 
 class DockerRegistry2::Registry
   # @param [#to_s] base_uri Docker registry base URI
@@ -26,7 +28,7 @@ class DockerRegistry2::Registry
     return doreq "get", url
   end
 
-  def doput(url,payload=nil)
+  def doput(url, payload=nil)
     return doreq "put", url, nil, payload
   end
 
@@ -66,6 +68,11 @@ class DockerRegistry2::Registry
       all_repos += repos
     end
     all_repos
+  end
+
+  def get_manifest_config(repo, config_blob_sha)
+    response = blob(repo, config_blob_sha)
+    JSON.parse(response.body)
   end
 
   def tags(repo,count=nil,last="",withHashes = false, auto_paginate: false)
@@ -207,6 +214,41 @@ class DockerRegistry2::Registry
   def push(manifest,dir)
   end
 
+  def upload_blob_from_filepath(repo, filepath, digest = nil)
+    # init a new empty blob in the registry
+    digest ||= 'sha256:'+ Digest::SHA256.file(filepath).to_s
+    size = File.size(filepath)
+    data = File.open(filepath, "rb")
+    response = prepare_upload(repo)
+
+    uuid = response.headers[:docker_upload_uuid]
+    location = response.headers[:location] + "&digest=#{digest}"
+
+    extra_headers = {
+      'Content-Length' => size,
+      'Content-Type' => 'application/octet-stream'
+    }
+    response = doreq(:put, location,nil, data,  extra_headers)
+    response
+  end
+
+
+  def upload_blob_from_string(repo, data)
+    # init a new empty blob in the registry
+    digest = 'sha256:' + Digest::SHA256.hexdigest(data).to_s
+    response = prepare_upload(repo)
+
+    uuid = response.headers[:docker_upload_uuid]
+    location = response.headers[:location] + "&digest=#{digest}"
+
+    extra_headers = {
+      'Content-Length' => data.length,
+      'Content-Type' => 'application/octet-stream'
+    }
+    response = doreq(:put, location,nil, data,  extra_headers)
+    response
+  end
+
   def tag(repo,tag,newrepo,newtag)
     manifest = manifest(repo, tag)
 
@@ -215,6 +257,60 @@ class DockerRegistry2::Registry
     else
       raise DockerRegistry2::RegistryVersionException
     end
+  end
+
+  def unzipped_sha(filepath)
+    Zlib::GzipReader.open(filepath) {|gz|
+      return Digest::SHA256.hexdigest(gz.read)
+    }
+  end
+
+  def append_blob(repo, tag, filepath)
+    layer_sha = "sha256:#{Digest::SHA256.file(filepath)}"
+    uncompressed_layer_sha = "sha256:#{unzipped_sha(filepath)}"
+    response = upload_blob_from_filepath(repo, filepath, layer_sha)
+    layer_size = File.size(filepath)
+    manifest = manifest(repo, tag)
+    config = get_manifest_config(repo, manifest['config']['digest'])
+
+    layer_history = {'created' => Time.now.utc.round(10).iso8601(9),
+                     'created_by' => "/bin/sh -c #(nop) COPY file:#{uncompressed_layer_sha.split(':').last} in /"}
+
+    config['rootfs']['diff_ids'] << uncompressed_layer_sha
+    config['history'] << layer_history
+    config['created'] = Time.now.utc.round(10).iso8601(9)
+    config_serialized = config.to_json
+
+    # manifest["layers"] << { "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "size": layer_size, "digest": layer_sha }
+    manifest["layers"] << { "mediaType" => "application/vnd.oci.image.layer.v1.tar+gzip",
+                            "size" => layer_size,
+                            "digest" => layer_sha }
+
+    response = upload_blob_from_string(repo, config_serialized)
+    #config_digest = response.headers[:docker_content_digest]
+    puts "response from upload #{response.code}"
+
+    config_digest = response.headers[:docker_content_digest]
+    puts "config sha #{config_digest}"
+
+
+    new_conf = get_manifest_config(repo, config_digest)
+    puts "re-gotten config: \n #{new_conf}"
+
+    config_info = { "mediaType" => "application/vnd.oci.image.config.v1+json",
+                    "size" => config_serialized.size,
+                    "digest" => response.headers[:docker_content_digest] }
+
+    manifest["config"] = config_info
+
+    response = upload_manifest(repo, tag, manifest)
+    response
+    manifest
+  end
+
+  def upload_manifest(repo, tag, manifest)
+    manifest_json = manifest.to_json
+    doreq(:put,"/v2/#{repo}/manifests/#{tag}",nil, manifest_json, {'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json'})
   end
 
   def copy(repo,tag,newregistry,newrepo,newtag)
@@ -265,20 +361,33 @@ class DockerRegistry2::Registry
   end
 
   private
-    def doreq(type,url,stream=nil,payload=nil)
+
+  def prepare_upload(repo)
+    response = doreq(:post,"/v2/#{repo}/blobs/uploads/",nil,nil, {'Content-Length' => 0 })
+    return response
+  end
+
+    def doreq(type, url, stream = nil, payload = nil, extra_headers = {})
       begin
         block = stream.nil? ? nil : proc { |response|
           response.read_body do |chunk|
             stream.write chunk
           end
         }
+        h = headers(payload: payload)
+        full_headers = h.merge(extra_headers)
+        url = @base_uri + url unless url.start_with?('http')
+
+        puts full_headers.inspect
         response = RestClient::Request.execute(@http_options.merge(
           method: type,
-          url: @base_uri+url,
-          headers: headers(payload: payload),
+          url: url,
+          headers: full_headers,
           block_response: block,
           payload: payload
         ))
+      rescue RestClient::BadRequest => e
+        puts e
       rescue SocketError
         raise DockerRegistry2::RegistryUnknownException
       rescue RestClient::NotFound => error
@@ -395,12 +504,15 @@ class DockerRegistry2::Registry
       h
     end
 
-    def headers(payload: nil, bearer_token: nil)
-      headers={}
-      headers['Authorization']="Bearer #{bearer_token}" unless bearer_token.nil?
-      headers['Accept']='application/vnd.docker.distribution.manifest.v2+json, application/json' if payload.nil?
-      headers['Content-Type']='application/vnd.docker.distribution.manifest.v2+json' unless payload.nil?
+  def make_digest(data)
+    "sha256:" + Digest::SHA256.hexdigest(data)
+  end
 
-      headers
-    end
+  def headers(payload: nil, bearer_token: nil)
+    headers={}
+    headers['Authorization']="Bearer #{bearer_token}" unless bearer_token.nil?
+    headers['Accept']='application/vnd.docker.distribution.manifest.v2+json, application/json' if payload.nil?
+    headers['Content-Type']='application/vnd.docker.distribution.manifest.v2+json' unless payload.nil?
+    headers
+  end
 end

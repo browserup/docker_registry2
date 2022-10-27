@@ -22,9 +22,11 @@ Gem::Specification.new do |spec|
   spec.test_files    = spec.files.grep(/^(test|spec|features)\//)
   spec.require_paths = ['lib']
 
-  spec.add_development_dependency 'bundler'
+  spec.add_dependency 'bundler'
+  spec.add_dependency 'gzip'
   spec.add_development_dependency 'rake', '~> 10.0'
   spec.add_development_dependency 'rubocop', '>= 0.26.0'
+  spec.add_development_dependency 'rspec'
 
   spec.add_dependency 'rest-client', '>= 1.8.0'
 end
