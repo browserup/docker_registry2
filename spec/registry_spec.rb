@@ -78,7 +78,8 @@ describe DockerRegistry2 do
 
   it "uploads a blob from filepath" do
     tarball_filepath = File.join(File.dirname(__FILE__ ),'files', 'mydata.tgz')
-    digest = @registry.upload_blob_from_filepath(@image_name, tarball_filepath)
+    response = @registry.upload_blob_from_filepath(@image_name, tarball_filepath)
+    digest = response.headers[:docker_content_digest]
     result = @registry.blob(@image_name, digest)
     expect(result).to_not be_nil
   end
@@ -94,11 +95,7 @@ describe DockerRegistry2 do
   it 'uploads a layer from tarball' do
     @orig_manifest = @registry.manifest @image_name, "latest"
     tarball_filepath = File.join(File.dirname(__FILE__ ),'files', 'mydata.tgz')
-    @registry.append_blob(@image_name, "latest", tarball_filepath)
-
-    @registry.append_blob('localhost:5000/bash', "latest", tarball_filepath)
-
-
+    @registry.append_tarball(@image_name, "latest", tarball_filepath)
     @new_manifest = @registry.manifest @image_name, "latest"
     expect(@new_manifest).to_not eq @manifest
     expect(@new_manifest.to_s.include?('digest'))
