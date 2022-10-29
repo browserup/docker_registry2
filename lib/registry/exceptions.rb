@@ -1,6 +1,5 @@
 module DockerRegistry2
   class Exception < RuntimeError
-    
   end
   
   class RegistryAuthenticationException < Exception
@@ -28,5 +27,8 @@ module DockerRegistry2
   end
 
   class InvalidMethod < Exception
+  end
+
+  class RegistryAppendError < Exception
   end
 end

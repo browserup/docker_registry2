@@ -420,6 +420,17 @@ reg.blob_size "namespace/repo", "sha256:abc5634737434"
 
 Of course, most of the time you won't need this, since the sizes are already included in the same place you got the blob hashes in the first place: the manifest.
 
+##### Append a Tarball Layer to an Existing Repo
+
+tarball_filepath = File.join(File.dirname(__FILE__ ),'files', 'mydata.tgz')
+
+@registry.append_blob(image_repo_name, "latest", tarball_filepath)
+
+In this case, if mydata is a tar'd folder named mydata.tgz, if you pull the image, you should now see 
+
+ /mydata/
+
+
 
 ### Exceptions
 
@@ -431,17 +442,7 @@ The simplest way to test is against a true v2 registry. Thus, the test setup and
 To run tests, simply run
 
 ```sh
-make test
-```
-
-This will run `./test.sh`, which will set up a docker registry in a container, run the tests, and then tear it down.
-
-If you are running on a system where you already have a registry against which to run, and/or cannot run `docker` commands, you can pass it the URL to which to connect for tests:
-
-```sh
-make test TEST_REGISTRY=http://registry:5000/   # replace with the URL to your registry
-# or to run manually
-TEST_REGISTRY=http://registry:5000/ ./test.sh
+bundle exec rspec spec
 ```
 
 ## License
@@ -453,3 +454,4 @@ MIT License.
 Developed by Avi Deitcher http://github.com/deitch
 Contributors Jonathan Hurter https://github.com/johnsudaar
 Contributions courtesy of TraderTools, Inc. http://tradertools.com
+Contributions courtesy of BrowserUp, Inc. https://browserup.com
