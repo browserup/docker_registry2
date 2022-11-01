@@ -3,6 +3,7 @@ require 'rest-client'
 require 'json'
 require 'gzip'
 require 'digest'
+require 'addressable/uri'
 
 class DockerRegistry2::Registry
   # @param [#to_s] base_uri Docker registry base URI
@@ -14,9 +15,9 @@ class DockerRegistry2::Registry
   # @option options [#to_s] :read_timeout Time to wait for data from a registry.
   #                                       It is ignored if http_options[:read_timeout] is also specified.
   # @option options [Hash] :http_options Extra options for RestClient::Request.execute.
-  def initialize(uri, options = {})
-    @uri = URI.parse(uri)
-    @base_uri = "#{@uri.scheme}://#{@uri.host}:#{@uri.port}"
+  def initialize(raw_uri, options = {})
+    @uri = Addressable::URI.heuristic_parse(raw_uri)
+    @base_uri = @uri.to_s
     @user = options[:user]
     @password = options[:password]
     @http_options = options[:http_options] || {}
